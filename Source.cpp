@@ -17,6 +17,15 @@ typedef uint16_t uint16;
 typedef uint32_t uint32;
 typedef uint64_t uint64;
 
+typedef struct RECTANGLE {
+	int x;
+	int y;
+	int w;
+	int h;
+} RECTANGLE;
+
+
+
 global_variable bool Running = false;
 global_variable BITMAPINFO BitmapInfo;
 global_variable void* BitmapMemory;
@@ -24,32 +33,7 @@ global_variable int BitmapWidth;
 global_variable int BitmapHeight;
 global_variable int BytesPerPixel = 4;
 
-internal void
-RenderWeirdGradient(int BlueOffset, int GreenOffset)
-{
-	int Width = BitmapWidth;
-	int Height = BitmapHeight;
-
-	int Pitch = Width * BytesPerPixel;
-	uint8* Row = (uint8*)BitmapMemory;
-	for (int Y = 0;
-		Y < BitmapHeight;
-		++Y)
-	{
-		uint32* Pixel = (uint32*)Row;
-		for (int X = 0;
-			X < BitmapWidth;
-			++X)
-		{
-			uint8 Blue = (X + BlueOffset);
-			uint8 Green = (Y + GreenOffset);
-
-			*Pixel++ = ((Green << 8) | Blue);
-		}
-
-		Row += Pitch;
-	}
-}
+global_variable RECTANGLE gRect;
 
 internal void Win32ResizeDIBSection(int width, int height) {
 	if (BitmapMemory) {
@@ -69,6 +53,41 @@ internal void Win32ResizeDIBSection(int width, int height) {
 
 	int BitmapMemorySize = (BitmapWidth * BitmapHeight) * BytesPerPixel;
 	BitmapMemory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
+}
+
+internal void ClearBackbuffer(uint32 color) {
+	if (!BitmapMemory) return;
+
+	uint32* pixels = (uint32*)BitmapMemory;
+	uint32 totalPixels = BitmapWidth * BitmapHeight;
+
+	for (int i = 0; i < totalPixels; ++i) {
+		pixels[i] = color;
+	}
+
+}
+
+internal void RenderRect(int left, int top, int right, int bottom, uint32 color) {
+	if (!BitmapMemory) return;
+
+	if (left < 0) left = 0;
+	if (top < 0) top = 0;
+	if (right > BitmapWidth)  right = BitmapWidth;
+	if (bottom > BitmapHeight) bottom = BitmapHeight;
+	if (right <= left || bottom <= top) return;
+
+	uint8* base = (uint8*)BitmapMemory;
+	int pitch = BitmapWidth * BytesPerPixel;
+
+	for (int y = top; y < bottom; ++y) {
+		// Start of this row
+		uint32* row = (uint32*)BitmapMemory + y * BitmapWidth + left;
+
+		// Fill the row segment
+		for (int x = 0; x < (right - left); ++x) {
+			row[x] = color;
+		}
+	}
 }
 
 internal void Win32UpdateWindow(HDC DeviceContext, RECT *ClientRect, int x, int y, int width, int height) {
@@ -154,8 +173,10 @@ int CALLBACK WinMain(
 
 		if (Window) {
 
-			int xOffset = 0;
-			int yOffset = 0;
+			gRect.x = 50;
+			gRect.y = 50;
+			gRect.w = 50;
+			gRect.h = 50;
 
 			Running = true;
 			while (Running) {
@@ -168,7 +189,12 @@ int CALLBACK WinMain(
 					DispatchMessageA(&Message);
 				}
 
-				RenderWeirdGradient(xOffset, yOffset);
+				ClearBackbuffer(0x00202020);
+				int left = gRect.x;
+				int top = gRect.y;
+				int right = (gRect.x + gRect.w);
+				int bottom = (gRect.y + gRect.h);
+				RenderRect(left, top, right, bottom, 0x000000FF);
 
 				HDC DeviceContext = GetDC(Window);
 				RECT ClientRect;
@@ -177,9 +203,6 @@ int CALLBACK WinMain(
 				int WindowHeight = ClientRect.bottom - ClientRect.top;
 				Win32UpdateWindow(DeviceContext, &ClientRect, 0, 0, WindowWidth, WindowHeight);
 				ReleaseDC(Window, DeviceContext);
-
-				++xOffset;
-				yOffset += 2;
 			}
 		}
 		else {
