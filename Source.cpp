@@ -1,4 +1,4 @@
-// Win32 Snake 
+/* Win32 Snake */
 
 #include <windows.h>
 #include <stdint.h>
