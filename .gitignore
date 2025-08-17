@@ -1,0 +1,47 @@
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.ncb
+*.opendb
+*.sdf
+*.tlog
+*.log
+*.pdb
+*.ilk
+*.obj
+*.ipch
+*.aps
+*.bsc
+*.sbr
+*.res
+*.pch
+*.idb
+*.opt
+*.bak
+*.vcproj.filters
+*.vcxproj.user
+*.vcxproj.filters
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+ARM/
+ARM64/
+bin/
+obj/
+
+# NuGet packages
+packages/
+
+# Resharper
+*.DotSettings
+_ReSharper.*/
+
+# Other temporary files
+*.tmp
+*.temp
+*.swp
+*.~
