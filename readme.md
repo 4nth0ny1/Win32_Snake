@@ -8,5 +8,5 @@
 - [x] - render player and food 
 - [x] - player/food collision detection
 - [x] - player auto movement
-- [] - snake gains body parts when eats food
+- [x] - snake gains body parts when eats food
 - [] - snake body and wall collision + game over screens
