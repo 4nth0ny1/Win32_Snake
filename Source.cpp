@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <stdint.h>
+#include <time.h>
 
 #define internal static 
 #define local_persist static 
@@ -48,6 +49,11 @@ global_variable int gPlayerCol = 0;
 
 global_variable int gFoodRow = 1;
 global_variable int gFoodCol = 1;
+
+global_variable int gDirRow = 0;
+global_variable int gDirCol = 1; // going right 
+global_variable DWORD gLastStepMs = 0;
+global_variable const DWORD STEP_MS = 400;
 
 internal void Win32ResizeDIBSection(int width, int height) {
 	if (BitmapMemory) {
@@ -259,10 +265,10 @@ LRESULT CALLBACK Win32MainWindowCallback(HWND Window, UINT Message, WPARAM wPara
 			bool wasDown = (lParam & (1 << 30)) != 0;
 			if (!wasDown) {
 				switch (wParam) {
-				case 'W': TryMovePlayer(-1, 0); CheckPlayerFoodCollision(); break;
-				case 'S': TryMovePlayer(1, 0);  CheckPlayerFoodCollision(); break;
-				case 'A': TryMovePlayer(0, -1); CheckPlayerFoodCollision(); break;
-				case 'D': TryMovePlayer(0, 1); CheckPlayerFoodCollision(); break;
+				case 'W': gDirRow = -1; gDirCol = 0; break; // up
+				case 'S': gDirRow = +1; gDirCol = 0; break; // down
+				case 'A': gDirRow = 0;  gDirCol = -1; break; // left
+				case 'D': gDirRow = 0;  gDirCol = +1; break; // right
 				case VK_ESCAPE: PostQuitMessage(0); break;
 				}
 			}
@@ -318,7 +324,20 @@ int CALLBACK WinMain(
 			GetClientRect(Window, &cr);
 			Win32ResizeDIBSection(cr.right - cr.left, cr.bottom - cr.top);
 
+			// Seed RNG once
+			srand((unsigned)time(NULL));
+
+			// Locate initial player/food markers from the map and restore tile underneath
 			FindPlayerOnMap();
+			FindFoodOnMap();
+
+			// If they happen to start overlapped, move food away
+			if (gPlayerRow == gFoodRow && gPlayerCol == gFoodCol) {
+				PlaceFoodRandomly();
+			}
+
+			// Start moving immediately
+			gLastStepMs = GetTickCount64();
 
 			Running = true;
 			while (Running) {
@@ -329,6 +348,14 @@ int CALLBACK WinMain(
 					}
 					TranslateMessage(&Message);
 					DispatchMessageA(&Message);
+				}
+
+				// Auto-step movement on a fixed cadence
+				DWORD now = GetTickCount64();
+				if ((now - gLastStepMs) >= STEP_MS) {
+					TryMovePlayer(gDirRow, gDirCol);
+					CheckPlayerFoodCollision();
+					gLastStepMs = now;
 				}
 
 				ClearBackbuffer(COLOR_BG);

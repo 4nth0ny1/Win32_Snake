@@ -7,6 +7,6 @@
 - [x] - render tilemap
 - [x] - render player and food 
 - [x] - player/food collision detection
-- [] - player auto movement
+- [x] - player auto movement
 - [] - snake gains body parts when eats food
-- [] - snake body and wall collision + game over screen
+- [] - snake body and wall collision + game over screens
