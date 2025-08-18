@@ -5,5 +5,8 @@
 - [x] - double buffer and render gradient
 - [x] - clear backbuffer and render rectangle
 - [x] - render tilemap
-- [] - render player and food 
-- [] - collisions
+- [x] - render player and food 
+- [x] - player/food collision detection
+- [] - player auto movement
+- [] - snake gains body parts when eats food
+- [] - snake body and wall collision + game over screen

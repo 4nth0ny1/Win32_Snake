@@ -30,6 +30,7 @@ enum { TILE_SIZE = 32, MAP_W = 12, MAP_H = 8 };
 #define COLOR_FLOOR  0x00303030
 #define COLOR_WALL   0x006666AA
 #define COLOR_PLAYER  0x0000AA00
+#define COLOR_FOOD	  0x00FFA500	
 
 global_variable int gMap[MAP_H][MAP_W] = {
 	{0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1},
@@ -44,6 +45,9 @@ global_variable int gMap[MAP_H][MAP_W] = {
 
 global_variable int gPlayerRow = 0;
 global_variable int gPlayerCol = 0;
+
+global_variable int gFoodRow = 1;
+global_variable int gFoodCol = 1;
 
 internal void Win32ResizeDIBSection(int width, int height) {
 	if (BitmapMemory) {
@@ -169,6 +173,52 @@ internal void RenderPlayer(void) {
 	RenderRect(left, top, right, bottom, COLOR_PLAYER); 
 }
 
+internal void FindFoodOnMap(void) {
+	for (int r = 0; r < MAP_H; ++r) {
+		for (int c = 0; c < MAP_H; ++c) {
+			if (gMap[r][c] == 3) {
+				gFoodRow = r;
+				gFoodCol = c;
+				gMap[r][c] = ((r + c) & 1);
+				return;
+			}
+		}
+	}
+	gFoodRow = 1; gFoodCol = 1;
+}
+
+internal int RandRange(int lo, int hi) {
+	return lo + (rand() % (hi - lo + 1));
+}
+
+internal void PlaceFoodRandomly(void) {
+	int r, c;
+	do {
+		r = RandRange(0, MAP_H - 1);
+		c = RandRange(0, MAP_W - 1);
+	} while (r == gPlayerRow && c == gPlayerCol);
+	gFoodRow = r;
+	gFoodCol = c;
+}
+
+internal void CheckPlayerFoodCollision(void) {
+	if (gPlayerRow == gFoodRow && gPlayerCol == gFoodCol) {
+		PlaceFoodRandomly();
+	}
+}
+
+internal void RenderFood(void) {
+	int tile, offX, offY;
+	ComputeTileLayout(&tile, &offX, &offY);
+
+	int left = offX + gFoodCol * tile;
+	int top = offY + gFoodRow * tile;
+	int right = left + tile;
+	int bottom = top + tile;
+
+	RenderRect(left, top, right, bottom, COLOR_FOOD);
+}
+
 internal void Win32UpdateWindow(HDC DeviceContext, RECT *ClientRect, int x, int y, int width, int height) {
 
 	int WindowWidth = ClientRect->right - ClientRect->left;
@@ -209,10 +259,10 @@ LRESULT CALLBACK Win32MainWindowCallback(HWND Window, UINT Message, WPARAM wPara
 			bool wasDown = (lParam & (1 << 30)) != 0;
 			if (!wasDown) {
 				switch (wParam) {
-				case 'W': TryMovePlayer(-1, 0); break;
-				case 'S': TryMovePlayer(1, 0); break;
-				case 'A': TryMovePlayer(0, -1); break;
-				case 'D': TryMovePlayer(0, 1); break;
+				case 'W': TryMovePlayer(-1, 0); CheckPlayerFoodCollision(); break;
+				case 'S': TryMovePlayer(1, 0);  CheckPlayerFoodCollision(); break;
+				case 'A': TryMovePlayer(0, -1); CheckPlayerFoodCollision(); break;
+				case 'D': TryMovePlayer(0, 1); CheckPlayerFoodCollision(); break;
 				case VK_ESCAPE: PostQuitMessage(0); break;
 				}
 			}
@@ -284,6 +334,7 @@ int CALLBACK WinMain(
 				ClearBackbuffer(COLOR_BG);
 				RenderTileMap(gMap);
 				RenderPlayer();
+				RenderFood();
 
 				HDC DeviceContext = GetDC(Window);
 				RECT ClientRect;
