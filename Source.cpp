@@ -1,7 +1,3 @@
-// Win32 tile game with player + food respawn on collision + auto-step movement (Snake-style)
-// Adds growing snake body on food
-// Drop-in single file
-
 #include <windows.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -36,12 +32,18 @@ enum { TILE_SIZE = 32, MAP_W = 12, MAP_H = 8 };
 // ==================== Globals ====================
 
 global_variable bool Running;
+global_variable bool gGameOver = false;
 
 global_variable BITMAPINFO BitmapInfo;
 global_variable void* BitmapMemory;
 global_variable int BitmapWidth;
 global_variable int BitmapHeight;
 global_variable int BytesPerPixel = 4;
+
+// Backbuffer as a DIBSection + memory DC (so we can TextOut into it)
+global_variable HDC      gMemDC = 0;
+global_variable HBITMAP  gDIBSection = 0;
+global_variable HBITMAP  gOldBitmap = 0;
 
 global_variable int gMap[MAP_H][MAP_W] = {
     {0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1},
@@ -72,38 +74,53 @@ global_variable int gFoodCol = 1;
 // Snake-style auto movement state
 global_variable int gDirRow = 0;   // -1 up, +1 down
 global_variable int gDirCol = 1;   // -1 left, +1 right (start moving right)
-global_variable DWORD gLastStepMs = 0;
-global_variable const DWORD STEP_MS = 400; // move every 400 ms
+global_variable ULONGLONG gLastStepMs = 0;
+global_variable const ULONGLONG STEP_MS = 200; // move every 200 ms
 
 // ==================== Backbuffer ====================
 
-internal void Win32ResizeDIBSection(int Width, int Height) {
-    if (BitmapMemory) {
-        VirtualFree(BitmapMemory, 0, MEM_RELEASE);
-        BitmapMemory = 0;
+internal void ReleaseBackbuffer(void) {
+    if (gMemDC) {
+        if (gDIBSection) {
+            SelectObject(gMemDC, gOldBitmap);
+            DeleteObject(gDIBSection);
+            gDIBSection = 0;
+        }
+        DeleteDC(gMemDC);
+        gMemDC = 0;
     }
+    BitmapMemory = 0;
+}
+
+internal void Win32ResizeDIBSection(int Width, int Height) {
+    // Dispose old resources
+    ReleaseBackbuffer();
 
     BitmapWidth = Width;
     BitmapHeight = Height;
+    if (BitmapWidth <= 0)  BitmapWidth = 1;
+    if (BitmapHeight <= 0) BitmapHeight = 1;
 
+    // Describe a top-down 32bpp DIBSection
+    ZeroMemory(&BitmapInfo, sizeof(BitmapInfo));
     BitmapInfo.bmiHeader.biSize = sizeof(BitmapInfo.bmiHeader);
     BitmapInfo.bmiHeader.biWidth = BitmapWidth;
-    BitmapInfo.bmiHeader.biHeight = -BitmapHeight; // top-down
+    BitmapInfo.bmiHeader.biHeight = -BitmapHeight; // top-down (negative)
     BitmapInfo.bmiHeader.biPlanes = 1;
     BitmapInfo.bmiHeader.biBitCount = 32;
     BitmapInfo.bmiHeader.biCompression = BI_RGB;
 
-    int BitmapMemorySize = (BitmapWidth * BitmapHeight) * BytesPerPixel;
-    BitmapMemory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
+    // Create memory DC and DIBSection
+    gMemDC = CreateCompatibleDC(NULL);
+    gDIBSection = CreateDIBSection(gMemDC, &BitmapInfo, DIB_RGB_COLORS, &BitmapMemory, NULL, 0);
+    gOldBitmap = (HBITMAP)SelectObject(gMemDC, gDIBSection);
 }
 
 internal void ClearBackBuffer(uint32 color_one) {
     if (!BitmapMemory) return;
     uint32* pixels = (uint32*)BitmapMemory;
     int totalPixels = BitmapWidth * BitmapHeight;
-    for (int i = 0; i < totalPixels; ++i) {
-        pixels[i] = color_one;
-    }
+    for (int i = 0; i < totalPixels; ++i) pixels[i] = color_one;
 }
 
 internal void RenderRect(int left, int top, int right, int bottom, uint32 color) {
@@ -117,25 +134,22 @@ internal void RenderRect(int left, int top, int right, int bottom, uint32 color)
 
     for (int y = top; y < bottom; ++y) {
         uint32* row = (uint32*)BitmapMemory + y * BitmapWidth + left;
-        for (int x = 0; x < (right - left); ++x) {
-            row[x] = color;
-        }
+        for (int x = 0; x < (right - left); ++x) row[x] = color;
     }
 }
 
 internal void ComputeTileLayout(int* outTilePx, int* outOffsetX, int* outOffsetY) {
-    // Fit as many whole, square tiles as possible
     int tileW = BitmapWidth / MAP_W;
     int tileH = BitmapHeight / MAP_H;
     int tile = (tileW < tileH) ? tileW : tileH;
-    if (tile < 1) tile = 1; // safety for tiny windows
+    if (tile < 1) tile = 1;
 
     int usedW = tile * MAP_W;
     int usedH = tile * MAP_H;
 
     *outTilePx = tile;
-    *outOffsetX = (BitmapWidth - usedW) / 2;  // center horizontally
-    *outOffsetY = (BitmapHeight - usedH) / 2; // center vertically
+    *outOffsetX = (BitmapWidth - usedW) / 2;
+    *outOffsetY = (BitmapHeight - usedH) / 2;
 }
 
 internal void RenderTileMap(const int map[MAP_H][MAP_W]) {
@@ -163,13 +177,13 @@ internal void Win32UpdateWindow(HDC DeviceContext, RECT* ClientRect, int X, int 
     int WindowWidth = ClientRect->right - ClientRect->left;
     int WindowHeight = ClientRect->bottom - ClientRect->top;
 
-    StretchDIBits(
+    // Blit the memory DC (which holds the DIBSection) to the window DC in one go
+    StretchBlt(
         DeviceContext,
         X, Y, WindowWidth, WindowHeight,
-        X, Y, BitmapWidth, BitmapHeight,
-        BitmapMemory,
-        &BitmapInfo,
-        DIB_RGB_COLORS, SRCCOPY
+        gMemDC,
+        0, 0, BitmapWidth, BitmapHeight,
+        SRCCOPY
     );
 }
 
@@ -181,9 +195,7 @@ internal void FindPlayerOnMap(void) {
             if (gMap[r][c] == 2) {
                 gPlayerRow = r;
                 gPlayerCol = c;
-                // restore the checkerboard value under the player
-                gMap[r][c] = ((r + c) & 1);  // 0/1 alternating pattern
-                // seed snake
+                gMap[r][c] = ((r + c) & 1);  // restore checkerboard under player
                 gSnake[0].r = r;
                 gSnake[0].c = c;
                 gSnakeLen = 1;
@@ -191,7 +203,6 @@ internal void FindPlayerOnMap(void) {
             }
         }
     }
-    // fallback if no '2' in map
     gPlayerRow = 0; gPlayerCol = 0;
     gSnake[0].r = 0; gSnake[0].c = 0; gSnakeLen = 1;
 }
@@ -202,13 +213,11 @@ internal void FindFoodOnMap(void) {
             if (gMap[r][c] == 3) {
                 gFoodRow = r;
                 gFoodCol = c;
-                // restore the checkerboard value under the food
-                gMap[r][c] = ((r + c) & 1);
+                gMap[r][c] = ((r + c) & 1); // restore checkerboard under food
                 return;
             }
         }
     }
-    // fallback if no '3' in map
     gFoodRow = 1; gFoodCol = 1;
 }
 
@@ -225,8 +234,7 @@ internal bool SnakeOccupies(int r, int c) {
 
 internal void PlaceFoodRandomly(void) {
     int r, c;
-    // keep picking until it's not on the snake
-    do {
+    do { // keep picking until it's not on the snake
         r = RandRange(0, MAP_H - 1);
         c = RandRange(0, MAP_W - 1);
     } while (SnakeOccupies(r, c));
@@ -234,45 +242,54 @@ internal void PlaceFoodRandomly(void) {
     gFoodCol = c;
 }
 
-// Return false if move would hit walls (edges); true otherwise.
-// Handles growth if food is eaten.
+// Return false if move hits walls/body; true otherwise.
+// Handles growth if food is eaten and sets gGameOver on fatal collisions.
 internal bool StepSnake(void) {
+    if (gGameOver) return false;
+
     int nextR = gSnake[0].r + gDirRow;
     int nextC = gSnake[0].c + gDirCol;
 
-    // clamp to map bounds (treat edges as blocking)
+    // Edge collision -> game over
     if (nextR < 0 || nextR >= MAP_H || nextC < 0 || nextC >= MAP_W) {
-        return false; // stop on edge; you can choose to end game or ignore
+        gGameOver = true;
+        return false;
     }
 
     bool ate = (nextR == gFoodRow && nextC == gFoodCol);
 
-    // shift body backward to make room for new head
-    // If eating: increase length first so we don't overwrite tail removal
+    // Self-collision check:
+    // If NOT eating, the tail will vacate, so stepping into the current tail cell is allowed.
+    // If eating, tail stays, so check all segments.
+    int ignoreIndex = (!ate && gSnakeLen > 0) ? (gSnakeLen - 1) : -1;
+    for (int i = 0; i < gSnakeLen; ++i) {
+        if (i == ignoreIndex) continue;
+        if (gSnake[i].r == nextR && gSnake[i].c == nextC) {
+            gGameOver = true;
+            return false;
+        }
+    }
+
+    // Growth first (if needed) so memmove range includes the new length
     if (ate && gSnakeLen < SNAKE_MAX) {
         gSnakeLen += 1;
     }
 
-    // move segments back (from tail toward head)
+    // Shift body back, open slot for new head
     if (gSnakeLen > 1) {
         memmove(&gSnake[1], &gSnake[0], sizeof(SNAKE_SEGMENT) * (gSnakeLen - 1));
     }
 
-    // place new head
+    // Place new head
     gSnake[0].r = nextR;
     gSnake[0].c = nextC;
 
-    // update convenience mirrors
+    // Mirrors
     gPlayerRow = nextR;
     gPlayerCol = nextC;
 
     if (ate) {
         PlaceFoodRandomly();
-    }
-    else {
-        // If not eaten, we already shifted—this effectively popped the tail
-        // because we did NOT increase length.
-        // (The memmove + unchanged gSnakeLen is enough.)
     }
 
     return true;
@@ -300,20 +317,52 @@ internal void RenderSnake(void) {
 internal void RenderFood(void) {
     int tile, offX, offY;
     ComputeTileLayout(&tile, &offX, &offY);
-
     int left = offX + gFoodCol * tile;
     int top = offY + gFoodRow * tile;
-    int right = left + tile;
-    int bottom = top + tile;
-
-    RenderRect(left, top, right, bottom, COLOR_FOOD); // orange food
+    RenderRect(left, top, left + tile, top + tile, COLOR_FOOD);
 }
+
+internal void RenderGameOverOverlayToBackbuffer(void) {
+    if (!gMemDC) return;
+
+    const char* text = "GAME OVER";
+    SIZE sz = { 0 };
+
+    // Font (same as before)
+    int dpiY = GetDeviceCaps(gMemDC, LOGPIXELSY);
+    int ptSize = 48;
+    int height = -MulDiv(ptSize, dpiY, 72);
+    HFONT font = CreateFontA(
+        height, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_OUTLINE_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "Segoe UI");
+    HFONT oldFont = font ? (HFONT)SelectObject(gMemDC, font) : 0;
+
+    // Transparent text background (no filled box)
+    SetBkMode(gMemDC, TRANSPARENT);
+
+    // Optional: tiny drop shadow for legibility (comment out if you want pure text only)
+    // Draw shadow first, 1px offset
+    SetTextColor(gMemDC, RGB(0, 0, 0));
+    GetTextExtentPoint32A(gMemDC, text, (int)lstrlenA(text), &sz);
+    int cx = (BitmapWidth - sz.cx) / 2;
+    int cy = (BitmapHeight - sz.cy) / 2;
+    TextOutA(gMemDC, cx + 1, cy + 1, text, (int)lstrlenA(text));
+
+    // Draw main white text on top (no background)
+    SetTextColor(gMemDC, RGB(255, 255, 255));
+    TextOutA(gMemDC, cx, cy, text, (int)lstrlenA(text));
+
+    if (font) {
+        SelectObject(gMemDC, oldFont);
+        DeleteObject(font);
+    }
+}
+
 
 // ==================== Window Proc ====================
 LRESULT CALLBACK
 Win32MainWindowCallback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam) {
-    LRESULT Result = 0;
-
     switch (Message) {
     case WM_SIZE: {
         RECT ClientRect;
@@ -323,22 +372,13 @@ Win32MainWindowCallback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
         Win32ResizeDIBSection(Width, Height);
     } break;
 
-    case WM_CLOSE: {
-        Running = false;
-    } break;
-
-    case WM_ACTIVATEAPP: {
-        OutputDebugStringA("ACTIVATE\n");
-    } break;
-
-    case WM_DESTROY: {
-        Running = false;
-    } break;
+    case WM_CLOSE: Running = false; break;
+    case WM_DESTROY: Running = false; break;
 
     case WM_KEYDOWN: {
         // Direction changes only; ignore auto-repeat
         bool wasDown = (LParam & (1 << 30)) != 0;
-        if (!wasDown) {
+        if (!wasDown && !gGameOver) {
             switch (WParam) {
             case 'W': if (gDirRow != 1) { gDirRow = -1; gDirCol = 0; } break;
             case 'S': if (gDirRow != -1) { gDirRow = +1; gDirCol = 0; } break;
@@ -347,103 +387,99 @@ Win32MainWindowCallback(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
             case VK_ESCAPE: PostQuitMessage(0); break;
             }
         }
+        else if (!wasDown && gGameOver) {
+            if (WParam == VK_ESCAPE) PostQuitMessage(0);
+        }
     } break;
+
+    case WM_ERASEBKGND:
+        return 1; // prevent background erase to avoid flicker
 
     case WM_PAINT: {
         PAINTSTRUCT Paint;
-        HDC DeviceContext = BeginPaint(Window, &Paint);
-        int X = Paint.rcPaint.left;
-        int Y = Paint.rcPaint.top;
-        int Width = Paint.rcPaint.right - Paint.rcPaint.left;
-        int Height = Paint.rcPaint.bottom - Paint.rcPaint.top;
-
-        RECT ClientRect;
-        GetClientRect(Window, &ClientRect);
-        Win32UpdateWindow(DeviceContext, &ClientRect, X, Y, Width, Height);
-
+        HDC dc = BeginPaint(Window, &Paint);
+        RECT cr; GetClientRect(Window, &cr);
+        Win32UpdateWindow(dc, &cr, 0, 0, cr.right - cr.left, cr.bottom - cr.top);
         EndPaint(Window, &Paint);
-    } break;
+    } return 0;
 
-    default: {
-        Result = DefWindowProc(Window, Message, WParam, LParam);
-    } break;
+    default:
+        return DefWindowProc(Window, Message, WParam, LParam);
     }
-    return(Result);
+    return 0;
 }
 
 // ==================== Entry ====================
 int CALLBACK WinMain(HINSTANCE Instance, HINSTANCE PrevInstance, LPSTR CommandLine, int ShowCode) {
-    WNDCLASS WindowClass = {};
-    WindowClass.lpfnWndProc = Win32MainWindowCallback;
-    WindowClass.hInstance = Instance;
-    WindowClass.lpszClassName = "Win32WindowClass";
+    WNDCLASSA wc = { 0 };
+    wc.lpfnWndProc = Win32MainWindowCallback;
+    wc.hInstance = Instance;
+    wc.lpszClassName = "Win32WindowClass";
 
-    if (RegisterClassA(&WindowClass)) {
-        HWND Window = CreateWindowExA(
-            0,
-            WindowClass.lpszClassName,
-            "Win32 Snake",
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-            CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-            0, 0, Instance, 0
-        );
+    if (!RegisterClassA(&wc)) return 0;
 
-        if (Window) {
-            // Init backbuffer to current client size
-            RECT cr; GetClientRect(Window, &cr);
-            Win32ResizeDIBSection(cr.right - cr.left, cr.bottom - cr.top);
+    HWND Window = CreateWindowExA(
+        0, wc.lpszClassName, "Win32 Snake",
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+        0, 0, Instance, 0);
 
-            // Seed RNG once
-            srand((unsigned)time(NULL));
+    if (!Window) return 0;
 
-            // Locate initial player/food markers from the map and restore tile underneath
-            FindPlayerOnMap();
-            FindFoodOnMap();
+    // Init backbuffer to current client size
+    RECT cr; GetClientRect(Window, &cr);
+    Win32ResizeDIBSection(cr.right - cr.left, cr.bottom - cr.top);
 
-            // If they happen to start overlapped, move food away
-            if (gPlayerRow == gFoodRow && gPlayerCol == gFoodCol) {
-                PlaceFoodRandomly();
-            }
+    // Seed RNG once
+    srand((unsigned)time(NULL));
 
-            // Start moving immediately
-            gLastStepMs = GetTickCount64();
+    // Locate initial player/food markers from the map and restore tile underneath
+    FindPlayerOnMap();
+    FindFoodOnMap();
 
-            Running = true;
-            while (Running) {
-                // Pump messages
-                MSG Message;
-                while (PeekMessage(&Message, 0, 0, 0, PM_REMOVE)) {
-                    if (Message.message == WM_QUIT) {
-                        Running = false;
-                    }
-                    TranslateMessage(&Message);
-                    DispatchMessageA(&Message);
-                }
-
-                // Auto-step movement on a fixed cadence
-                DWORD now = GetTickCount64();
-                if ((now - gLastStepMs) >= STEP_MS) {
-                    // advance snake; ignore return for now (edge stops)
-                    StepSnake();
-                    gLastStepMs = now;
-                }
-
-                // Render
-                ClearBackBuffer(COLOR_BG);
-                RenderTileMap(gMap); // draws floor/walls (checkerboard)
-                RenderSnake();       // draw head + body
-                RenderFood();        // draw food on top
-
-                HDC DeviceContext = GetDC(Window);
-                RECT ClientRect;
-                GetClientRect(Window, &ClientRect);
-                int WindowWidth = ClientRect.right - ClientRect.left;
-                int WindowHeight = ClientRect.bottom - ClientRect.top;
-                Win32UpdateWindow(DeviceContext, &ClientRect, 0, 0, WindowWidth, WindowHeight);
-                ReleaseDC(Window, DeviceContext);
-            }
-        }
+    // If they happen to start overlapped, move food away
+    if (gPlayerRow == gFoodRow && gPlayerCol == gFoodCol) {
+        PlaceFoodRandomly();
     }
 
-    return(0);
+    // Start moving immediately
+    gLastStepMs = GetTickCount64();
+
+    Running = true;
+    while (Running) {
+        // Pump messages
+        MSG Message;
+        while (PeekMessage(&Message, 0, 0, 0, PM_REMOVE)) {
+            if (Message.message == WM_QUIT) Running = false;
+            TranslateMessage(&Message);
+            DispatchMessageA(&Message);
+        }
+
+        // Auto-step movement on a fixed cadence (disable when game over)
+        ULONGLONG now = GetTickCount64();
+        if (!gGameOver && (now - gLastStepMs) >= STEP_MS) {
+            StepSnake(); // will set gGameOver on collision
+            gLastStepMs = now;
+        }
+
+        // Render into backbuffer
+        ClearBackBuffer(COLOR_BG);
+        RenderTileMap(gMap); // draws floor/walls (checkerboard)
+        RenderSnake();       // draw head + body
+        if (!gGameOver) {
+            RenderFood();    // keep food off once game is over (optional)
+        }
+        else {
+            RenderGameOverOverlayToBackbuffer(); // draw text into backbuffer (no flicker)
+        }
+
+        // Blit once per frame
+        HDC dc = GetDC(Window);
+        RECT client; GetClientRect(Window, &client);
+        Win32UpdateWindow(dc, &client, 0, 0, client.right - client.left, client.bottom - client.top);
+        ReleaseDC(Window, dc);
+    }
+
+    ReleaseBackbuffer();
+    return 0;
 }
