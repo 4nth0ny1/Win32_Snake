@@ -29,7 +29,7 @@ enum { TILE_SIZE = 32, MAP_W = 12, MAP_H = 8 };
 #define COLOR_BG     0x00202020
 #define COLOR_FLOOR  0x00303030
 #define COLOR_WALL   0x006666AA
-#define COLOR_SPAWN  0x0000AA00
+#define COLOR_PLAYER  0x0000AA00
 
 global_variable int gMap[MAP_H][MAP_W] = {
 	{0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1},
@@ -41,6 +41,9 @@ global_variable int gMap[MAP_H][MAP_W] = {
 	{0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1},
 	{1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0},
 };
+
+global_variable int gPlayerRow = 0;
+global_variable int gPlayerCol = 0;
 
 internal void Win32ResizeDIBSection(int width, int height) {
 	if (BitmapMemory) {
@@ -122,11 +125,48 @@ internal void RenderTileMap(const int map[MAP_H][MAP_W]) {
 
 			uint32 color = COLOR_FLOOR;
 			if (map[row][col] == 1) color = COLOR_WALL;
-			else if (map[row][col] == 2) color = COLOR_SPAWN;
+			else if (map[row][col] == 2) color = COLOR_PLAYER;
 
 			RenderRect(left, top, right, bottom, color);
 		}
 	} 
+}
+
+internal void FindPlayerOnMap(void) {
+	for (int r = 0; r < MAP_H; ++r) {
+		for (int c = 0; c < MAP_W; ++c) {
+			if (gMap[r][c] == 2) {
+				gPlayerRow = r;
+				gPlayerCol = c;
+
+				gMap[r][c] = ((r + c) & 1);
+				return;
+			}
+		}
+	}
+	gPlayerRow = 0; gPlayerCol = 0;
+}
+
+internal void TryMovePlayer(int dRow, int dCol) {
+	int newR = gPlayerRow + dRow;
+	int newC = gPlayerCol + dCol;
+
+	if (newR < 0 || newR >= MAP_H || newC < 0 || newC >= MAP_W) return;
+
+	gPlayerRow = newR;
+	gPlayerCol = newC;
+}
+
+internal void RenderPlayer(void) {
+	int tile, offX, offY;
+	ComputeTileLayout(&tile, &offX, &offY);
+
+	int left = offX + gPlayerCol * tile;
+	int top = offY + gPlayerRow * tile;
+	int right = left + tile;
+	int bottom = top + tile;
+
+	RenderRect(left, top, right, bottom, COLOR_PLAYER); 
 }
 
 internal void Win32UpdateWindow(HDC DeviceContext, RECT *ClientRect, int x, int y, int width, int height) {
@@ -164,6 +204,18 @@ LRESULT CALLBACK Win32MainWindowCallback(HWND Window, UINT Message, WPARAM wPara
 		} break;
 		case WM_DESTROY: {
 			PostQuitMessage(0);                  
+		} break;
+		case WM_KEYDOWN: {
+			bool wasDown = (lParam & (1 << 30)) != 0;
+			if (!wasDown) {
+				switch (wParam) {
+				case 'W': TryMovePlayer(-1, 0); break;
+				case 'S': TryMovePlayer(1, 0); break;
+				case 'A': TryMovePlayer(0, -1); break;
+				case 'D': TryMovePlayer(0, 1); break;
+				case VK_ESCAPE: PostQuitMessage(0); break;
+				}
+			}
 		} break;
 		case WM_PAINT: {
 			PAINTSTRUCT ps; 
@@ -212,6 +264,12 @@ int CALLBACK WinMain(
 
 		if (Window) {
 
+			RECT cr;
+			GetClientRect(Window, &cr);
+			Win32ResizeDIBSection(cr.right - cr.left, cr.bottom - cr.top);
+
+			FindPlayerOnMap();
+
 			Running = true;
 			while (Running) {
 				MSG Message;
@@ -225,6 +283,7 @@ int CALLBACK WinMain(
 
 				ClearBackbuffer(COLOR_BG);
 				RenderTileMap(gMap);
+				RenderPlayer();
 
 				HDC DeviceContext = GetDC(Window);
 				RECT ClientRect;
