@@ -17,15 +17,6 @@ typedef uint16_t uint16;
 typedef uint32_t uint32;
 typedef uint64_t uint64;
 
-typedef struct RECTANGLE {
-	int x;
-	int y;
-	int w;
-	int h;
-} RECTANGLE;
-
-
-
 global_variable bool Running = false;
 global_variable BITMAPINFO BitmapInfo;
 global_variable void* BitmapMemory;
@@ -33,7 +24,23 @@ global_variable int BitmapWidth;
 global_variable int BitmapHeight;
 global_variable int BytesPerPixel = 4;
 
-global_variable RECTANGLE gRect;
+enum { TILE_SIZE = 32, MAP_W = 12, MAP_H = 8 };
+
+#define COLOR_BG     0x00202020
+#define COLOR_FLOOR  0x00303030
+#define COLOR_WALL   0x006666AA
+#define COLOR_SPAWN  0x0000AA00
+
+global_variable int gMap[MAP_H][MAP_W] = {
+	{0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1},
+	{1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0},
+	{0, 1, 0, 2, 0, 1, 0, 1, 0, 1, 0, 1},
+	{1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0},
+	{0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1},
+	{1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0},
+	{0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1},
+	{1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0},
+};
 
 internal void Win32ResizeDIBSection(int width, int height) {
 	if (BitmapMemory) {
@@ -46,7 +53,7 @@ internal void Win32ResizeDIBSection(int width, int height) {
 
 	BitmapInfo.bmiHeader.biSize = sizeof(BitmapInfo.bmiHeader);
 	BitmapInfo.bmiHeader.biWidth = BitmapWidth;
-	BitmapInfo.bmiHeader.biHeight = -BitmapHeight; // top-down
+	BitmapInfo.bmiHeader.biHeight = -BitmapHeight;
 	BitmapInfo.bmiHeader.biPlanes = 1;
 	BitmapInfo.bmiHeader.biBitCount = 32;
 	BitmapInfo.bmiHeader.biCompression = BI_RGB;
@@ -64,7 +71,6 @@ internal void ClearBackbuffer(uint32 color) {
 	for (int i = 0; i < totalPixels; ++i) {
 		pixels[i] = color;
 	}
-
 }
 
 internal void RenderRect(int left, int top, int right, int bottom, uint32 color) {
@@ -80,14 +86,47 @@ internal void RenderRect(int left, int top, int right, int bottom, uint32 color)
 	int pitch = BitmapWidth * BytesPerPixel;
 
 	for (int y = top; y < bottom; ++y) {
-		// Start of this row
 		uint32* row = (uint32*)BitmapMemory + y * BitmapWidth + left;
 
-		// Fill the row segment
 		for (int x = 0; x < (right - left); ++x) {
 			row[x] = color;
 		}
 	}
+}
+
+internal void ComputeTileLayout(int* outTilePx, int* outOffsetX, int* outOffsetY) {
+	int tileW = BitmapWidth / MAP_W;
+	int tileH = BitmapHeight / MAP_H;
+	int tile = (tileW < tileH) ? tileW : tileH;
+	if (tile < 1) tile = 1;
+
+	int usedW = tile * MAP_W;
+	int usedH = tile * MAP_H;
+
+	*outTilePx = tile;
+	*outOffsetX = (BitmapWidth - usedW) / 2;
+	*outOffsetY = (BitmapHeight - usedH) / 2;
+}
+
+
+internal void RenderTileMap(const int map[MAP_H][MAP_W]) {
+	int tile, offX, offY;
+	ComputeTileLayout(&tile, &offX, &offY);
+
+	for (int row = 0; row < MAP_H; ++row) {
+		for (int col = 0; col < MAP_W; ++col) {
+			int left = offX + col * tile;
+			int top = offY + row * tile;
+			int right = left + tile;
+			int bottom = top + tile;
+
+			uint32 color = COLOR_FLOOR;
+			if (map[row][col] == 1) color = COLOR_WALL;
+			else if (map[row][col] == 2) color = COLOR_SPAWN;
+
+			RenderRect(left, top, right, bottom, color);
+		}
+	} 
 }
 
 internal void Win32UpdateWindow(HDC DeviceContext, RECT *ClientRect, int x, int y, int width, int height) {
@@ -173,11 +212,6 @@ int CALLBACK WinMain(
 
 		if (Window) {
 
-			gRect.x = 50;
-			gRect.y = 50;
-			gRect.w = 50;
-			gRect.h = 50;
-
 			Running = true;
 			while (Running) {
 				MSG Message;
@@ -189,12 +223,8 @@ int CALLBACK WinMain(
 					DispatchMessageA(&Message);
 				}
 
-				ClearBackbuffer(0x00202020);
-				int left = gRect.x;
-				int top = gRect.y;
-				int right = (gRect.x + gRect.w);
-				int bottom = (gRect.y + gRect.h);
-				RenderRect(left, top, right, bottom, 0x000000FF);
+				ClearBackbuffer(COLOR_BG);
+				RenderTileMap(gMap);
 
 				HDC DeviceContext = GetDC(Window);
 				RECT ClientRect;

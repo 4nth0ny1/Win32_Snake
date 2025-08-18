@@ -4,6 +4,6 @@
 - [x] - window and game loop
 - [x] - double buffer and render gradient
 - [x] - clear backbuffer and render rectangle
-- [] - render tilemap
+- [x] - render tilemap
 - [] - render player and food 
 - [] - collisions
